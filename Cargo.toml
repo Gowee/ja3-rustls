@@ -1,0 +1,21 @@
+[package]
+description = "JA3 TLS fingerprints working with Rustls types"
+edition = "2021"
+name = "rustls-ja3"
+version = "0.0.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+hex = {version = "0.4", optional = true}
+itertools = "0.10.4"
+md-5 = {version = "0.10", optional = true}
+rustls = {version = "0.20", features = []}
+
+[features]
+# default = ["md5-string"]
+md5 = ["md-5"]
+md5-string = ["md-5", "hex"]
+
+[dev-dependencies]
+hex-literal = "0.3"
