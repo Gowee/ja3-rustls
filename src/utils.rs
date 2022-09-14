@@ -3,11 +3,12 @@ use rustls::internal::msgs::handshake::{
     ClientExtension, ClientHelloPayload, HandshakeMessagePayload, HandshakePayload,
     ServerExtension, ServerHelloPayload,
 };
-use rustls::internal::msgs::message::{Message, MessageError, MessagePayload, OpaqueMessage};
+use rustls::internal::msgs::message::{Message, MessagePayload, OpaqueMessage};
 use rustls::{Error as RustlsError, ProtocolVersion};
 
 use std::fmt;
 
+#[allow(dead_code)]
 pub fn get_server_tls_version(shp: &ServerHelloPayload) -> Option<ProtocolVersion> {
     shp.extensions
         .iter()
