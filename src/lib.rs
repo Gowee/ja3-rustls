@@ -1,11 +1,11 @@
 /// JA3 with Rustls types
-/// 
+///
 /// # Example
 /// Extract JA3 TLS fingerprint from a slice of bytes:
 /// ```rust
 /// use ja3_rustls::{parse_tls_plain_message, TlsMessageExt, Ja3Extractor};
 /// use hex_literal::hex;
-/// 
+///
 /// let buf = hex!("16030100f5010000f10303ad8e0c8dfe3adbc045e51aee4cb9480c02d5da4a240f95e8282a1f51be34901a20681af80b44c4b359adb3f9543a966e07e6ba6bed551472a62cd4b107cbd40e830014130213011303c02cc02bcca9c030c02fcca800ff01000094002b00050403040303000b00020100000a00080006001d00170018000d00140012050304030807080608050804060105010401001700000005000501000000000000001800160000137777772e706574616c7365617263682e636f6d00120000003300260024001d0020086fffef5fa7f04fb7d788615bc425820eba366ddb5f75c7d8336a0a05722d38002d0002010100230000");
 /// let chp = parse_tls_plain_message(&buf)
 ///   .ok()
@@ -16,19 +16,18 @@
 /// println!("{}", chp.ja3_with_real_version());
 /// assert_eq!(chp.ja3().to_string(), "771,4866-4865-4867-49196-49195-52393-49200-49199-52392-255,43-11-10-13-23-5-0-18-51-45-35,29-23-24,0");
 /// ```
-/// 
+///
 /// To generate hex string of JA3, activating optional features via Cargo.toml:
 /// ```toml
 /// # in Cargo.toml
 /// # under [dependencies]
-/// ja3-rustls = { version = "0.0.0", features = ["md5-string"] } # or just md5 
+/// ja3-rustls = { version = "0.0.0", features = ["md5-string"] } # or just md5
 /// ```
 /// , then
 /// ```no_run
 /// println!("{:x?}", chp.ja3().to_md5()); // requires feature: md5
 /// println!("{}", chp.ja3().to_md5_string()); // requires feature: md5-string
 /// ```
-
 use rustls::{
     internal::msgs::{
         enums::{ECPointFormat, ExtensionType, NamedGroup},
@@ -38,8 +37,9 @@ use rustls::{
 };
 
 pub use rustls::internal::msgs::handshake::ClientHelloPayload;
+use utils::ConcatenatedParser;
 
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 mod utils;
 
@@ -105,17 +105,12 @@ fn get_ja3_from_chp(chp: &ClientHelloPayload, use_real_version: bool) -> Ja3 {
         .collect();
 
     let mut curves = Vec::<u16>::new();
+    let mut point_formats = Vec::<u8>::new();
     for extension in chp.extensions.iter() {
         match extension {
             ClientExtension::NamedGroups(groups) => {
                 curves = groups.iter().map(|curve| curve.get_u16()).collect()
             }
-            _ => {}
-        }
-    }
-    let mut point_formats = Vec::<u8>::new();
-    for extension in chp.extensions.iter() {
-        match extension {
             ClientExtension::ECPointFormats(formats) => {
                 point_formats = formats.iter().map(|format| format.get_u8()).collect()
             }
@@ -183,6 +178,49 @@ impl fmt::Display for Ja3 {
     }
 }
 
+impl FromStr for Ja3 {
+    type Err = &'static str; // TODO: typing
+
+    fn from_str(s: &str) -> Result<Ja3, Self::Err> {
+        let mut parts = s.split(',');
+        let version = parts
+            .next()
+            .ok_or("Emtpy string")?
+            .parse::<u16>()
+            .map_err(|_e| "Version not integer")?;
+        let ciphers = parts
+            .next()
+            .ok_or("No ciphers and following")?
+            .parse::<ConcatenatedParser<_, '-'>>()?
+            .into_inner();
+        let extensions = parts
+            .next()
+            .ok_or("No extensiosn and following")?
+            .parse::<ConcatenatedParser<_, '-'>>()?
+            .into_inner();
+        let curves = parts
+            .next()
+            .ok_or("No curves and following")?
+            .parse::<ConcatenatedParser<_, '-'>>()?
+            .into_inner();
+        let point_formats = parts
+            .next()
+            .ok_or("No point formats")?
+            .parse::<ConcatenatedParser<_, '-'>>()?
+            .into_inner();
+        if parts.next().is_some() {
+            return Err("String redundant");
+        }
+        Ok(Ja3 {
+            version,
+            ciphers,
+            extensions,
+            curves,
+            point_formats,
+        })
+    }
+}
+
 #[cfg(feature = "md5")]
 impl Ja3 {
     /// Helper function to generate the MD5 format of JA3 string.
@@ -206,9 +244,10 @@ mod tests {
     use hex_literal::hex;
 
     use crate::utils::{parse_tls_plain_message, TlsMessageExt};
-    use crate::Ja3Extractor;
+    use crate::{Ja3, Ja3Extractor};
     #[test]
     fn ja3_from_client_hello_message() {
+        // rustls safe default client ja3
         let buf = hex!("16030100f5010000f10303ad8e0c8dfe3adbc045e51aee4cb9480c02d5da4a240f95e8282a1f51be34901a20681af80b44c4b359adb3f9543a966e07e6ba6bed551472a62cd4b107cbd40e830014130213011303c02cc02bcca9c030c02fcca800ff01000094002b00050403040303000b00020100000a00080006001d00170018000d00140012050304030807080608050804060105010401001700000005000501000000000000001800160000137777772e706574616c7365617263682e636f6d00120000003300260024001d0020086fffef5fa7f04fb7d788615bc425820eba366ddb5f75c7d8336a0a05722d38002d0002010100230000");
         let chp = parse_tls_plain_message(&buf)
             .ok()
@@ -226,5 +265,20 @@ mod tests {
                 "a94fc11547bcef10847672ff518b3fb9"
             )
         }
+    }
+
+    #[test]
+    fn ja3_from_string() {
+        let buf = hex!("16030100f5010000f10303ad8e0c8dfe3adbc045e51aee4cb9480c02d5da4a240f95e8282a1f51be34901a20681af80b44c4b359adb3f9543a966e07e6ba6bed551472a62cd4b107cbd40e830014130213011303c02cc02bcca9c030c02fcca800ff01000094002b00050403040303000b00020100000a00080006001d00170018000d00140012050304030807080608050804060105010401001700000005000501000000000000001800160000137777772e706574616c7365617263682e636f6d00120000003300260024001d0020086fffef5fa7f04fb7d788615bc425820eba366ddb5f75c7d8336a0a05722d38002d0002010100230000");
+        let chp = parse_tls_plain_message(&buf)
+            .ok()
+            .and_then(|message| message.into_client_hello_payload())
+            .expect("Message valid");
+        let ja3 = "771,4866-4865-4867-49196-49195-52393-49200-49199-52392-255,43-11-10-13-23-5-0-18-51-45-35,29-23-24,0".parse().unwrap();
+        println!("{:?}", ja3);
+        assert_eq!(chp.ja3(), ja3);
+        assert!("771,4866-4865-4867-49196-49195-52393-49200-49199-52392-255,43-11-10-13-23-5-0-18-51-45-35,29-23-24,0,".parse::<Ja3>().is_err());
+        assert!("771,".parse::<Ja3>().is_err());
+        assert!("a,4866-4865-4867-49196-49195-52393-49200-49199-52392-255,43-11-10-13-23-5-0-18-51-45-35,29-23-24,0".parse::<Ja3>().is_err());
     }
 }

@@ -7,6 +7,7 @@ use rustls::internal::msgs::message::{Message, MessagePayload, OpaqueMessage};
 use rustls::{Error as RustlsError, ProtocolVersion};
 
 use std::fmt;
+use std::str::FromStr;
 
 #[allow(dead_code)]
 pub fn get_server_tls_version(shp: &ServerHelloPayload) -> Option<ProtocolVersion> {
@@ -102,3 +103,27 @@ pub fn fmtconcat<T: fmt::Display, const CHAR: char>(
 ) -> ConcatenatingFormatter<'_, T, CHAR> {
     ConcatenatingFormatter(slice)
 }
+
+pub struct ConcatenatedParser<T: FromStr, const CHAR: char>(pub Vec<T>);
+
+impl<T: FromStr, const CHAR: char> FromStr for ConcatenatedParser<T, CHAR> {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut v = vec![];
+        for part in s.split(CHAR) {
+            v.push(part.parse::<T>().map_err(|_e| "Not valid value")?);
+        }
+        Ok(Self(v))
+    }
+}
+
+impl<T: FromStr, const CHAR: char> ConcatenatedParser<T, CHAR> {
+    pub fn into_inner(self) -> Vec<T> {
+        self.0
+    }
+}
+
+// pub fn parseconcat<T: FromStr, const CHAR: char>() -> ConcatenatedParser<T, CHAR> {
+
+// }
