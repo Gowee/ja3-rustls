@@ -8,10 +8,10 @@ license = "MIT"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-hex = {version = "0.4", optional = true}
-itertools = "0.10.4"
-md-5 = {version = "0.10", optional = true}
 rustls = {version = "0.20", features = []}
+
+hex = {version = "0.4", optional = true}
+md-5 = {version = "0.10", optional = true}
 
 [features]
 # default = ["md5-string"]
