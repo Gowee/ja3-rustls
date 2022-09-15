@@ -1,33 +1,33 @@
-/// JA3 with Rustls types
-///
-/// # Example
-/// Extract JA3 TLS fingerprint from a slice of bytes:
-/// ```rust
-/// use ja3_rustls::{parse_tls_plain_message, TlsMessageExt, Ja3Extractor};
-/// use hex_literal::hex;
-///
-/// let buf = hex!("16030100f5010000f10303ad8e0c8dfe3adbc045e51aee4cb9480c02d5da4a240f95e8282a1f51be34901a20681af80b44c4b359adb3f9543a966e07e6ba6bed551472a62cd4b107cbd40e830014130213011303c02cc02bcca9c030c02fcca800ff01000094002b00050403040303000b00020100000a00080006001d00170018000d00140012050304030807080608050804060105010401001700000005000501000000000000001800160000137777772e706574616c7365617263682e636f6d00120000003300260024001d0020086fffef5fa7f04fb7d788615bc425820eba366ddb5f75c7d8336a0a05722d38002d0002010100230000");
-/// let chp = parse_tls_plain_message(&buf)
-///   .ok()
-///   .and_then(|message| message.into_client_hello_payload())
-///   .expect("Message valid");
-/// println!("{:?}", chp.ja3());
-/// println!("{}", chp.ja3());
-/// println!("{}", chp.ja3_with_real_version());
-/// assert_eq!(chp.ja3().to_string(), "771,4866-4865-4867-49196-49195-52393-49200-49199-52392-255,43-11-10-13-23-5-0-18-51-45-35,29-23-24,0");
-/// ```
-///
-/// To generate hex string of JA3, activating optional features via Cargo.toml:
-/// ```toml
-/// # in Cargo.toml
-/// # under [dependencies]
-/// ja3-rustls = { version = "0.0.0", features = ["md5-string"] } # or just md5
-/// ```
-/// , then
-/// ```no_run
-/// println!("{:x?}", chp.ja3().to_md5()); // requires feature: md5
-/// println!("{}", chp.ja3().to_md5_string()); // requires feature: md5-string
-/// ```
+//! JA3 with Rustls types
+//!
+//! # Example
+//! Extract JA3 TLS fingerprint from a slice of bytes:
+//! ```rust
+//! use ja3_rustls::{parse_tls_plain_message, TlsMessageExt, Ja3Extractor};
+//! use hex_literal::hex;
+//!
+//! let buf = hex!("16030100f5010000f10303ad8e0c8dfe3adbc045e51aee4cb9480c02d5da4a240f95e8282a1f51be34901a20681af80b44c4b359adb3f9543a966e07e6ba6bed551472a62cd4b107cbd40e830014130213011303c02cc02bcca9c030c02fcca800ff01000094002b00050403040303000b00020100000a00080006001d00170018000d00140012050304030807080608050804060105010401001700000005000501000000000000001800160000137777772e706574616c7365617263682e636f6d00120000003300260024001d0020086fffef5fa7f04fb7d788615bc425820eba366ddb5f75c7d8336a0a05722d38002d0002010100230000");
+//! let chp = parse_tls_plain_message(&buf)
+//!   .ok()
+//!   .and_then(|message| message.into_client_hello_payload())
+//!   .expect("Message valid");
+//! println!("{:?}", chp.ja3());
+//! println!("{}", chp.ja3());
+//! println!("{}", chp.ja3_with_real_version());
+//! assert_eq!(chp.ja3().to_string(), "771,4866-4865-4867-49196-49195-52393-49200-49199-52392-255,43-11-10-13-23-5-0-18-51-45-35,29-23-24,0");
+//! ```
+//!
+//! To generate hex string of JA3, activating optional features via Cargo.toml:
+//! ```toml
+//! # in Cargo.toml
+//! # under [dependencies]
+//! ja3-rustls = { version = "0.0.0", features = ["md5-string"] } # or just md5
+//! ```
+//! , then
+//! ```ignore
+//! println!("{:x?}", chp.ja3().to_md5()); // requires feature: md5
+//! println!("{}", chp.ja3().to_md5_string()); // requires feature: md5-string
+//! ```
 use rustls::{
     internal::msgs::{
         enums::{ECPointFormat, ExtensionType, NamedGroup},
@@ -47,7 +47,7 @@ use crate::utils::{fmtconcat, get_client_tls_versions};
 pub use crate::utils::{parse_tls_plain_message, TlsMessageExt};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// JA3, as explained in https://github.com/salesforce/ja3
+/// JA3, as explained in [https://github.com/salesforce/ja3]
 pub struct Ja3 {
     /// SSLVersion
     pub version: u16,
@@ -134,7 +134,7 @@ impl From<&ClientHelloPayload> for Ja3 {
 }
 
 impl Ja3 {
-    pub fn version_as_typed(&self) -> ProtocolVersion {
+    pub fn version_to_typed(&self) -> ProtocolVersion {
         ProtocolVersion::from(self.version)
     }
 
