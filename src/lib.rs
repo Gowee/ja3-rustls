@@ -36,15 +36,25 @@ use rustls::{
     CipherSuite, ProtocolVersion,
 };
 
-pub use rustls::internal::msgs::handshake::ClientHelloPayload;
-use utils::ConcatenatedParser;
+pub use rustls::internal::msgs::{handshake::ClientHelloPayload, message::Message};
 
 use std::{fmt, str::FromStr};
 
 mod utils;
 
-use crate::utils::{fmtconcat, get_client_tls_versions};
+use crate::utils::{fmtconcat, get_client_tls_versions, rand_in, ConcatenatedParser};
 pub use crate::utils::{parse_tls_plain_message, TlsMessageExt};
+
+/// These values, when interpreted as big-endian u8 tuples, are reserved GREASE values for cipher
+/// suites and Application-Layer Protocol Negotiation (ALPN).
+/// When interpreted as u16, are reserved GREASE values for extensions, named groups,
+/// signature algorithms, and versions:
+pub const GREASE_U16_BE: [u16; 16] = [
+    0x0A0A, 0x1A1A, 0x2A2A, 0x3A3A, 0x4A4A, 0x5A5A, 0x6A6A, 0x7A7A, 0x8A8A, 0x9A9A, 0xAAAA, 0xBABA,
+    0xCACA, 0xDADA, 0xEAEA, 0xFAFA,
+];
+/// These values are reserved as GREASE values for PskKeyExchangeModes:
+pub const GREASE_U8: [u8; 8] = [0x0B, 0x2A, 0x49, 0x68, 0x87, 0xA6, 0xC5, 0xE4];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// JA3, as explained in [https://github.com/salesforce/ja3]
@@ -68,21 +78,42 @@ pub trait Ja3Extractor {
     /// Almost same as `ja3`, except that the TLS version specified in extensions, if any, are
     /// preferred over the one indicated by the record header.
     ///
-    /// This appears to imcompliant to the JA3 standard.
+    /// This appears to be imcompliant to the JA3 standard.
     fn ja3_with_real_version(&self) -> Ja3;
+
+    /// Check `ja3_with_real_version` and `ja3_with_grease` for more info.
+    fn ja3_with_real_version_and_grease(&self) -> Ja3;
+
+    /// Almost same `ja3`, except that all [RFC8701](https://www.rfc-editor.org/rfc/rfc8701.html)
+    /// GREASE values are kept as is.
+    ///
+    /// This contradicts the JA3 standard.
+    fn ja3_with_grease(&self) -> Ja3;
 }
 
 impl Ja3Extractor for ClientHelloPayload {
     fn ja3(&self) -> Ja3 {
-        get_ja3_from_chp(self, false)
+        get_ja3_from_chp(self, false, true)
     }
 
     fn ja3_with_real_version(&self) -> Ja3 {
-        get_ja3_from_chp(self, true)
+        get_ja3_from_chp(self, true, true)
+    }
+
+    fn ja3_with_real_version_and_grease(&self) -> Ja3 {
+        get_ja3_from_chp(self, true, true)
+    }
+
+    fn ja3_with_grease(&self) -> Ja3 {
+        get_ja3_from_chp(self, true, false)
     }
 }
 
-fn get_ja3_from_chp(chp: &ClientHelloPayload, use_real_version: bool) -> Ja3 {
+fn get_ja3_from_chp(
+    chp: &ClientHelloPayload,
+    use_real_version: bool,
+    ignore_rfc8701_grease: bool,
+) -> Ja3 {
     // SSLVersion,Cipher,SSLExtension,EllipticCurve,EllipticCurvePointFormat
     let mut version = chp.client_version;
     if use_real_version
@@ -97,11 +128,13 @@ fn get_ja3_from_chp(chp: &ClientHelloPayload, use_real_version: bool) -> Ja3 {
         .cipher_suites
         .iter()
         .map(|cipher| cipher.get_u16())
+        .filter(|&ext| !ignore_rfc8701_grease || !is_grease_u16_be(ext))
         .collect();
     let extensions = chp
         .extensions
         .iter()
         .map(|extension| extension.get_type().get_u16())
+        .filter(|&ext| !ignore_rfc8701_grease || !is_grease_u16_be(ext))
         .collect();
 
     let mut curves = Vec::<u16>::new();
@@ -109,7 +142,11 @@ fn get_ja3_from_chp(chp: &ClientHelloPayload, use_real_version: bool) -> Ja3 {
     for extension in chp.extensions.iter() {
         match extension {
             ClientExtension::NamedGroups(groups) => {
-                curves = groups.iter().map(|curve| curve.get_u16()).collect()
+                curves = groups
+                    .iter()
+                    .map(|curve| curve.get_u16())
+                    .filter(|&ext| !ignore_rfc8701_grease || !is_grease_u16_be(ext))
+                    .collect()
             }
             ClientExtension::ECPointFormats(formats) => {
                 point_formats = formats.iter().map(|format| format.get_u8()).collect()
@@ -141,13 +178,51 @@ impl Ja3 {
     pub fn ciphers_as_typed(&self) -> impl Iterator<Item = CipherSuite> + '_ {
         self.ciphers.iter().map(|&cipher| CipherSuite::from(cipher))
     }
+
+    // `ciphers_as_typed` with existing GREASE values rewritten as newly generated ones. It
+    // is based on an insecure RNG unless the `rand` crate feature is activated.
+    pub fn ciphers_regreasing_as_typed(&self) -> impl Iterator<Item = CipherSuite> + '_ {
+        self.ciphers.iter().map(|&cipher| {
+            CipherSuite::from(if is_grease_u16_be(cipher) {
+                grease_u16_be()
+            } else {
+                cipher
+            })
+        })
+    }
+
     pub fn extensions_as_typed(&self) -> impl Iterator<Item = ExtensionType> + '_ {
         self.extensions
             .iter()
             .map(|&extension| ExtensionType::from(extension))
     }
+
+    // `extensions_as_typed` with existing GREASE values rewritten as newly generated ones. It
+    // is based on an insecure RNG unless the `rand` crate feature is activated.
+    pub fn extensions_regreasing_as_typed(&self) -> impl Iterator<Item = ExtensionType> + '_ {
+        self.extensions.iter().map(|&extension| {
+            ExtensionType::from(if is_grease_u16_be(extension) {
+                grease_u16_be()
+            } else {
+                extension
+            })
+        })
+    }
+
     pub fn curves_as_typed(&self) -> impl Iterator<Item = NamedGroup> + '_ {
         self.curves.iter().map(|&curve| NamedGroup::from(curve))
+    }
+
+    // `curves_as_typed` with existing GREASE values rewritten as newly generated ones. It
+    // is based on an insecure RNG unless the `rand` crate feature is activated.
+    pub fn curves_regreasing_as_typed(&self) -> impl Iterator<Item = NamedGroup> + '_ {
+        self.curves.iter().map(|&curve| {
+            NamedGroup::from(if is_grease_u16_be(curve) {
+                grease_u16_be()
+            } else {
+                curve
+            })
+        })
     }
     pub fn point_formats_as_typed(&self) -> impl Iterator<Item = ECPointFormat> + '_ {
         self.point_formats
@@ -239,6 +314,19 @@ impl Ja3 {
     }
 }
 
+#[inline(always)]
+pub fn is_grease_u16_be(v: u16) -> bool {
+    v & 0x0F0F == 0x0A0A
+}
+
+pub fn grease_u16_be() -> u16 {
+    GREASE_U16_BE[rand_in::<0, 16>()]
+}
+
+pub fn grease_u8() -> u8 {
+    GREASE_U8[rand_in::<0, 8>()]
+}
+
 #[cfg(test)]
 mod tests {
     use hex_literal::hex;
@@ -280,5 +368,35 @@ mod tests {
         assert!("771,4866-4865-4867-49196-49195-52393-49200-49199-52392-255,43-11-10-13-23-5-0-18-51-45-35,29-23-24,0,".parse::<Ja3>().is_err());
         assert!("771,".parse::<Ja3>().is_err());
         assert!("a,4866-4865-4867-49196-49195-52393-49200-49199-52392-255,43-11-10-13-23-5-0-18-51-45-35,29-23-24,0".parse::<Ja3>().is_err());
+    }
+
+    #[test]
+    fn regreasing() {
+        let ja3:Ja3 = "771,2570-4866-4865-4867-49196-49195-52393-49200-49199-52392-255,2570-43-11-10-13-23-5-0-18-51-45-2570-35,2570-29-23-24,0".parse().unwrap();
+        // failed chance: (1 - (1 - 15/16) ** 3) ~= 17.6%
+        assert_ne!(
+            ja3.ciphers_regreasing_as_typed().collect::<Vec<_>>(),
+            ja3.ciphers_regreasing_as_typed().collect::<Vec<_>>()
+        );
+        assert_ne!(
+            ja3.extensions_regreasing_as_typed().collect::<Vec<_>>(),
+            ja3.extensions_regreasing_as_typed().collect::<Vec<_>>()
+        );
+        assert_ne!(
+            ja3.curves_regreasing_as_typed().collect::<Vec<_>>(),
+            ja3.curves_regreasing_as_typed().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            ja3.ciphers_as_typed().collect::<Vec<_>>(),
+            ja3.ciphers_as_typed().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            ja3.extensions_as_typed().collect::<Vec<_>>(),
+            ja3.extensions_as_typed().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            ja3.curves_as_typed().collect::<Vec<_>>(),
+            ja3.curves_as_typed().collect::<Vec<_>>()
+        );
     }
 }

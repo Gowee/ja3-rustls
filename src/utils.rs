@@ -6,8 +6,11 @@ use rustls::internal::msgs::handshake::{
 use rustls::internal::msgs::message::{Message, MessagePayload, OpaqueMessage};
 use rustls::{Error as RustlsError, ProtocolVersion};
 
+use std::collections::hash_map::DefaultHasher;
 use std::fmt;
+use std::hash::Hasher;
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[allow(dead_code)]
 pub fn get_server_tls_version(shp: &ServerHelloPayload) -> Option<ProtocolVersion> {
@@ -127,3 +130,24 @@ impl<T: FromStr, const CHAR: char> ConcatenatedParser<T, CHAR> {
 // pub fn parseconcat<T: FromStr, const CHAR: char>() -> ConcatenatedParser<T, CHAR> {
 
 // }
+
+// Generate a random number within S..E.
+pub fn rand_in<const S: usize, const E: usize>() -> usize {
+    #[cfg(not(feature = "rand"))]
+    {
+        // https://users.rust-lang.org/t/random-number-without-using-the-external-crate/17260/11
+        // https://www.reddit.com/r/rust/comments/c1az1t/comment/erbz4mg/
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let mut h = DefaultHasher::new();
+        h.write_u32(nanos);
+        (h.finish() as usize) % (E - S) + S
+    }
+    #[cfg(feature = "rand")]
+    {
+        use rand::{thread_rng, Rng};
+        thread_rng().gen_range(S..E)
+    }
+}
