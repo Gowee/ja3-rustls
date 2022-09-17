@@ -40,21 +40,17 @@ pub use rustls::internal::msgs::{handshake::ClientHelloPayload, message::Message
 
 use std::{fmt, str::FromStr};
 
+mod grease;
+mod ja3nm;
 mod utils;
 
-use crate::utils::{fmtconcat, get_client_tls_versions, rand_in, ConcatenatedParser};
+use crate::utils::{fmtconcat, get_client_tls_versions, ConcatenatedParser};
 pub use crate::utils::{parse_tls_plain_message, TlsMessageExt};
 
-/// These values, when interpreted as big-endian u8 tuples, are reserved GREASE values for cipher
-/// suites and Application-Layer Protocol Negotiation (ALPN).
-/// When interpreted as u16, are reserved GREASE values for extensions, named groups,
-/// signature algorithms, and versions:
-pub const GREASE_U16_BE: [u16; 16] = [
-    0x0A0A, 0x1A1A, 0x2A2A, 0x3A3A, 0x4A4A, 0x5A5A, 0x6A6A, 0x7A7A, 0x8A8A, 0x9A9A, 0xAAAA, 0xBABA,
-    0xCACA, 0xDADA, 0xEAEA, 0xFAFA,
-];
-/// These values are reserved as GREASE values for PskKeyExchangeModes:
-pub const GREASE_U8: [u8; 8] = [0x0B, 0x2A, 0x49, 0x68, 0x87, 0xA6, 0xC5, 0xE4];
+use crate::ja3nm::get_ja3_and_more_from_chp;
+pub use crate::ja3nm::Ja3andMore;
+
+pub use crate::grease::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// JA3, as explained in [https://github.com/salesforce/ja3]
@@ -89,6 +85,17 @@ pub trait Ja3Extractor {
     ///
     /// This contradicts the JA3 standard.
     fn ja3_with_grease(&self) -> Ja3;
+
+    /// Get the JA3 and more fields of a [`ClientHelloPayload`]
+    ///
+    /// Additional fields are not a part of the JA3 standard.
+    fn ja3_and_more(&self) -> Ja3andMore;
+
+    /// Almost same `ja3_and_more`, except that all [RFC8701](https://www.rfc-editor.org/rfc/rfc8701.html)
+    /// GREASE values are kept as is.
+    ///
+    /// This contradicts the JA3 standard.
+    fn ja3_and_more_with_grease(&self) -> Ja3andMore;
 }
 
 impl Ja3Extractor for ClientHelloPayload {
@@ -106,6 +113,14 @@ impl Ja3Extractor for ClientHelloPayload {
 
     fn ja3_with_grease(&self) -> Ja3 {
         get_ja3_from_chp(self, true, false)
+    }
+
+    fn ja3_and_more(&self) -> Ja3andMore {
+        get_ja3_and_more_from_chp(self, true)
+    }
+
+    fn ja3_and_more_with_grease(&self) -> Ja3andMore {
+        get_ja3_and_more_from_chp(self, false)
     }
 }
 
@@ -179,16 +194,12 @@ impl Ja3 {
         self.ciphers.iter().map(|&cipher| CipherSuite::from(cipher))
     }
 
-    // `ciphers_as_typed` with existing GREASE values rewritten as newly generated ones. It
-    // is based on an insecure RNG unless the `rand` crate feature is activated.
+    /// `ciphers_as_typed` with existing GREASE values rewritten as newly generated ones. It
+    /// is based on an insecure RNG unless the `rand` crate feature is activated.
     pub fn ciphers_regreasing_as_typed(&self) -> impl Iterator<Item = CipherSuite> + '_ {
-        self.ciphers.iter().map(|&cipher| {
-            CipherSuite::from(if is_grease_u16_be(cipher) {
-                grease_u16_be()
-            } else {
-                cipher
-            })
-        })
+        self.ciphers
+            .iter()
+            .map(|&cipher| CipherSuite::from(try_regrease_u16_be(cipher)))
     }
 
     pub fn extensions_as_typed(&self) -> impl Iterator<Item = ExtensionType> + '_ {
@@ -197,32 +208,24 @@ impl Ja3 {
             .map(|&extension| ExtensionType::from(extension))
     }
 
-    // `extensions_as_typed` with existing GREASE values rewritten as newly generated ones. It
-    // is based on an insecure RNG unless the `rand` crate feature is activated.
+    /// `extensions_as_typed` with existing GREASE values rewritten as newly generated ones. It
+    /// is based on an insecure RNG unless the `rand` crate feature is activated.
     pub fn extensions_regreasing_as_typed(&self) -> impl Iterator<Item = ExtensionType> + '_ {
-        self.extensions.iter().map(|&extension| {
-            ExtensionType::from(if is_grease_u16_be(extension) {
-                grease_u16_be()
-            } else {
-                extension
-            })
-        })
+        self.extensions
+            .iter()
+            .map(|&extension| ExtensionType::from(try_regrease_u16_be(extension)))
     }
 
     pub fn curves_as_typed(&self) -> impl Iterator<Item = NamedGroup> + '_ {
         self.curves.iter().map(|&curve| NamedGroup::from(curve))
     }
 
-    // `curves_as_typed` with existing GREASE values rewritten as newly generated ones. It
-    // is based on an insecure RNG unless the `rand` crate feature is activated.
+    /// `curves_as_typed` with existing GREASE values rewritten as newly generated ones. It
+    /// is based on an insecure RNG unless the `rand` crate feature is activated.
     pub fn curves_regreasing_as_typed(&self) -> impl Iterator<Item = NamedGroup> + '_ {
-        self.curves.iter().map(|&curve| {
-            NamedGroup::from(if is_grease_u16_be(curve) {
-                grease_u16_be()
-            } else {
-                curve
-            })
-        })
+        self.curves
+            .iter()
+            .map(|&curve| NamedGroup::from(try_regrease_u16_be(curve)))
     }
     pub fn point_formats_as_typed(&self) -> impl Iterator<Item = ECPointFormat> + '_ {
         self.point_formats
@@ -312,19 +315,6 @@ impl Ja3 {
     pub fn to_md5_string(&self) -> String {
         hex::encode(self.to_md5())
     }
-}
-
-#[inline(always)]
-pub fn is_grease_u16_be(v: u16) -> bool {
-    v & 0x0F0F == 0x0A0A
-}
-
-pub fn grease_u16_be() -> u16 {
-    GREASE_U16_BE[rand_in::<0, 16>()]
-}
-
-pub fn grease_u8() -> u8 {
-    GREASE_U8[rand_in::<0, 8>()]
 }
 
 #[cfg(test)]
