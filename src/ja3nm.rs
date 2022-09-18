@@ -10,12 +10,14 @@ use crate::get_ja3_from_chp;
 use crate::grease::*;
 use crate::Ja3;
 
-/// `Ja3` and more fields.
+/// `Ja3` and more fields
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ja3andMore {
     pub ja3: Ja3,
-    pub signature_algos: Vec<u16>,
-    pub key_share: Vec<u16>,
-    pub supported_versions: Vec<u16>,
+    pub alpn: Vec<Vec<u8>>,           // 0x0010
+    pub signature_algos: Vec<u16>,    // 0x000d
+    pub supported_versions: Vec<u16>, // 0x002b
+    pub key_share: Vec<u16>,          // 0x0033
 }
 
 pub fn get_ja3_and_more_from_chp(
@@ -23,6 +25,7 @@ pub fn get_ja3_and_more_from_chp(
     ignore_rfc8701_grease: bool,
 ) -> Ja3andMore {
     use ClientExtension::*;
+    let mut alpn = vec![];
     let mut signature_algos = vec![];
     let mut key_share = vec![];
     let mut supported_versions = vec![];
@@ -30,6 +33,9 @@ pub fn get_ja3_and_more_from_chp(
     let ja3 = get_ja3_from_chp(chp, false, ignore_rfc8701_grease);
     for extension in chp.extensions.iter() {
         match extension {
+            Protocols(protos) => {
+                alpn = protos.iter().map(|pld| pld.clone().into_inner()).collect();
+            }
             SignatureAlgorithms(algos) => {
                 signature_algos = algos
                     .iter()
@@ -57,6 +63,7 @@ pub fn get_ja3_and_more_from_chp(
     }
     Ja3andMore {
         ja3,
+        alpn,
         signature_algos,
         key_share,
         supported_versions,
@@ -64,6 +71,10 @@ pub fn get_ja3_and_more_from_chp(
 }
 
 impl Ja3andMore {
+    pub fn into_ja3(self) -> Ja3 {
+        self.ja3
+    }
+
     pub fn signature_algos_as_typed(&self) -> impl Iterator<Item = SignatureScheme> + '_ {
         self.signature_algos.iter().map(|&algo| algo.into())
     }

@@ -12,7 +12,6 @@ use std::hash::Hasher;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[allow(dead_code)]
 pub fn get_server_tls_version(shp: &ServerHelloPayload) -> Option<ProtocolVersion> {
     shp.extensions
         .iter()

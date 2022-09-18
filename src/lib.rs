@@ -44,8 +44,8 @@ mod grease;
 mod ja3nm;
 mod utils;
 
-use crate::utils::{fmtconcat, get_client_tls_versions, ConcatenatedParser};
-pub use crate::utils::{parse_tls_plain_message, TlsMessageExt};
+pub use crate::utils::*;
+// use crate::utils::{fmtconcat, get_client_tls_versions, ConcatenatedParser};
 
 use crate::ja3nm::get_ja3_and_more_from_chp;
 pub use crate::ja3nm::Ja3andMore;
@@ -186,6 +186,22 @@ impl From<&ClientHelloPayload> for Ja3 {
 }
 
 impl Ja3 {
+    pub fn into_ja3_and_more(
+        self,
+        alpn: Vec<Vec<u8>>,
+        signature_algos: Vec<u16>,
+        key_share: Vec<u16>,
+        supported_versions: Vec<u16>,
+    ) -> Ja3andMore {
+        Ja3andMore {
+            ja3: self,
+            alpn,
+            signature_algos,
+            key_share,
+            supported_versions,
+        }
+    }
+
     pub fn version_to_typed(&self) -> ProtocolVersion {
         ProtocolVersion::from(self.version)
     }
