@@ -3,14 +3,11 @@ use rustls::internal::msgs::handshake::{
     ClientExtension, ClientHelloPayload, HandshakeMessagePayload, HandshakePayload,
     ServerExtension, ServerHelloPayload,
 };
-use rustls::internal::msgs::message::{Message, MessagePayload, OpaqueMessage};
-use rustls::{Error as RustlsError, ProtocolVersion};
+use rustls::internal::msgs::message::{Message, MessageError, MessagePayload, OpaqueMessage};
+use rustls::{Error as RustlsError, InvalidMessage, ProtocolVersion};
 
-use std::collections::hash_map::DefaultHasher;
 use std::fmt;
-use std::hash::Hasher;
 use std::str::FromStr;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn get_server_tls_version(shp: &ServerHelloPayload) -> Option<ProtocolVersion> {
     shp.extensions
@@ -81,7 +78,16 @@ impl TlsMessageExt for Message {
 pub fn parse_tls_plain_message(buf: &[u8]) -> Result<Message, RustlsError> {
     OpaqueMessage::read(&mut Reader::init(buf))
         .map(|om| om.into_plain_message())
-        .map_err(|_e| RustlsError::CorruptMessage) // invalid header
+        .map_err(|e| {
+            RustlsError::InvalidMessage(match e {
+                MessageError::TooShortForHeader => InvalidMessage::MessageTooShort,
+                MessageError::TooShortForLength => InvalidMessage::MessageTooShort,
+                MessageError::InvalidEmptyPayload => InvalidMessage::InvalidEmptyPayload,
+                MessageError::MessageTooLarge => InvalidMessage::MessageTooLarge,
+                MessageError::InvalidContentType => InvalidMessage::InvalidContentType,
+                MessageError::UnknownProtocolVersion => InvalidMessage::UnknownProtocolVersion,
+            })
+        }) // invalid header
         .and_then(Message::try_from)
 }
 
@@ -136,6 +142,9 @@ pub fn rand_in<const S: usize, const E: usize>() -> usize {
     {
         // https://users.rust-lang.org/t/random-number-without-using-the-external-crate/17260/11
         // https://www.reddit.com/r/rust/comments/c1az1t/comment/erbz4mg/
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::Hasher;
+        use std::time::{SystemTime, UNIX_EPOCH};
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

@@ -34,7 +34,10 @@ pub fn get_ja3_and_more_from_chp(
     for extension in chp.extensions.iter() {
         match extension {
             Protocols(protos) => {
-                alpn = protos.iter().map(|pld| pld.clone().into_inner()).collect();
+                alpn = protos
+                    .iter()
+                    .map(|pld| pld.clone().as_ref().to_vec())
+                    .collect();
             }
             SignatureAlgorithms(algos) => {
                 signature_algos = algos
